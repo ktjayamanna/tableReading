@@ -5,10 +5,9 @@ from typing import List
 
 import click
 import numpy as np
-import pandas as pd
+import matplotlib.pyplot as plt
 from albumentations import Compose
 from PIL import Image
-from pytesseract import image_to_string
 from skimage.filters import threshold_otsu
 from skimage.segmentation import clear_border
 from skimage.measure import label, regionprops
@@ -39,28 +38,49 @@ class Predict:
         self.model.eval()
         self.model.requires_grad_(False)
 
-    def predict(self, image: Image) -> List[pd.DataFrame]:
+    def predict(self, image: Image):
         """Predict a image table values.
 
         Args:
             image (Image): PIL.Image to
 
-        Returns (List[pd.DataFrame]): Tables in pandas DataFrame format.
         """
         processed_image = self.transforms(image=np.array(image))["image"]
-        print("Orignal image size is", processed_image.unsqueeze(0).shape)
+
         table_mask, column_mask = self.model.forward(processed_image.unsqueeze(0))
-        print("Original image ", image.size)
-        print("table_mask", table_mask.shape)
-        print("column_mask", column_mask.shape)
 
         table_mask = self._apply_threshold(table_mask)
         column_mask = self._apply_threshold(column_mask)
-        print("Table mask 2.0 ", table_mask.shape)
-        print("column mask 2.0 ", table_mask.shape)
 
+        # Move channels last, convert to numpy, then scale from 0-1 to 0-255 
+        # and finally convert to uint8 for PIL compatibility
+        processed_image_np = processed_image.squeeze().permute(1, 2, 0).numpy() * 255
+        processed_image_np = processed_image_np.astype(np.uint8)
+
+        # Convert processed image back to PIL for displaying
+        processed_image_pil = Image.fromarray(processed_image_np)
+
+        # Display original image, table mask, and column mask
+        fig, axs = plt.subplots(2, 3, figsize=(20, 20))
+        axs[0, 0].imshow(processed_image_pil)
+        axs[0, 0].set_title('Original Image')
+        axs[0, 1].imshow(table_mask, cmap='gray')
+        axs[0, 1].set_title('Table Mask')
+        axs[0, 2].imshow(column_mask, cmap='gray')
+        axs[0, 2].set_title('Column Mask')
+
+        # Overlay the masks on processed image
+        axs[1, 0].imshow(processed_image_pil)
+        axs[1, 0].imshow(table_mask, cmap='jet', alpha=0.5)  # Overlay table mask
+        axs[1, 0].set_title('Table Mask Overlay')
+
+        axs[1, 1].imshow(processed_image_pil)
+        axs[1, 1].imshow(column_mask, cmap='jet', alpha=0.5)  # Overlay column mask
+        axs[1, 1].set_title('Column Mask Overlay')
+
+        plt.show()
+        tmp = self._segment_image(table_mask)
         segmented_tables = self._process_tables(self._segment_image(table_mask))
-        print("These are segmented tables", segmented_tables[0].shape)
 
         tables = []
         for table in segmented_tables:
@@ -68,10 +88,11 @@ class Predict:
             if segmented_columns:
                 cols = []
                 for column in segmented_columns.values():
-                    cols.append(self._column_to_dataframe(column, image))
-                tables.append(pd.concat(cols, ignore_index=True, axis=1))
+                    cols.append(column)
+                tables.append(cols)
         return tables
 
+        # Other methods remain unchanged
     def _apply_threshold(self, mask):
         mask = mask.squeeze(0).squeeze(0).numpy() > self.threshold
         return mask.astype(int)
@@ -83,7 +104,6 @@ class Predict:
             table = np.where(segmented_tables == i, 1, 0)
             if table.sum() > height * width * self.per:
                 tables.append(convex_hull_image(table))
-
         return tables
 
     def _process_columns(self, segmented_columns):
@@ -92,7 +112,6 @@ class Predict:
         for j in np.unique(segmented_columns)[1:]:
             column = np.where(segmented_columns == j, 1, 0)
             column = column.astype(int)
-
             if column.sum() > width * height * self.per:
                 position = regionprops(column)[0].centroid[1]
                 cols[position] = column
@@ -106,29 +125,17 @@ class Predict:
         label_image = label(cleared)
         return label_image
 
-    @staticmethod
-    def _column_to_dataframe(column, image):
-        width, height = image.size
-        column = resize(np.expand_dims(column, axis=2), (height, width), preserve_range=True) > 0.01
-
-        crop = column * image
-        white = np.ones(column.shape) * invert(column) * 255
-        crop = crop + white
-        ocr = image_to_string(Image.fromarray(crop.astype(np.uint8)))
-        return pd.DataFrame({"col": [value for value in ocr.split("\n") if len(value) > 0]})
-
 
 @click.command()
 @click.option('--image_path', default="./data/data/Marmot_data/10.1.1.193.1812_24.bmp")
 @click.option('--model_weights', default="./data/best_model.ckpt")
-def predict(image_path: str, model_weights: str) -> List[pd.DataFrame]:
+def predict(image_path: str, model_weights: str):
     """Predict table content.
 
     Args:
         image_path (str): image path.
         model_weights (str): model weights path.
 
-    Returns (List[pd.DataFrame]): Tables in pandas DataFrame format.
     """
     import albumentations as album
     from albumentations.pytorch.transforms import ToTensorV2
@@ -141,7 +148,7 @@ def predict(image_path: str, model_weights: str) -> List[pd.DataFrame]:
     pred = Predict(model_weights, transforms)
 
     image = Image.open(image_path)
-    print(pred.predict(image))
+    pred.predict(image)
 
 
 if __name__ == '__main__':
