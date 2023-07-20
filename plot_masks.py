@@ -45,7 +45,9 @@ class Predict:
             image (Image): PIL.Image to
 
         """
-        processed_image = self.transforms(image=np.array(image))["image"]
+        print("Sabrina says", np.array(image).shape)
+        image = np.array(image)[:, :, 0:3]
+        processed_image = self.transforms(image=image)["image"]
 
         table_mask, column_mask = self.model.forward(processed_image.unsqueeze(0))
 
